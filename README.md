@@ -79,6 +79,12 @@ TrackPlayer.setupPlayer().then(async () => {
 ```
 
 ## Maintainers
-* Android: [Guilherme Chaguri](https://github.com/Guichaguri)
-* iOS: [David Chavez](https://github.com/dcvz)
-* Windows: [Guilherme Chaguri](https://github.com/Guichaguri)
+[David Chavez](https://github.com/dcvz) & [Guilherme Chaguri](https://github.com/Guichaguri)
+
+## Support the development
+Support the further development of this and other libraries.
+- [Support via Patreon](https://patreon.com/dcvz)
+- [Support via Paypal](https://paypal.me/dcvz)
+
+## Community
+[Spectrum](https://spectrum.chat/rntrackplayer)
