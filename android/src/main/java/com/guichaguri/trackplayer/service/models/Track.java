@@ -103,7 +103,9 @@ public class Track {
         builder.putString(METADATA_KEY_ALBUM, album);
         builder.putString(METADATA_KEY_DATE, date);
         builder.putString(METADATA_KEY_GENRE, genre);
-        builder.putString(METADATA_KEY_MEDIA_URI, uri.toString());
+        if (uri != null) {
+            builder.putString(METADATA_KEY_MEDIA_URI, uri.toString());
+        }
         builder.putString(METADATA_KEY_MEDIA_ID, id);
 
         builder.putLong(METADATA_KEY_DURATION, duration);
