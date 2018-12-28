@@ -178,7 +178,7 @@ public class MusicManager implements OnAudioFocusChangeListener {
     }
 
     public void onStateChange(int state) {
-        Log.d(Utils.LOG, "onStateChange");
+        Log.d(Utils.LOG, "onStateChange: " + Integer.toString(state));
 
         Bundle bundle = new Bundle();
         bundle.putInt("state", state);
