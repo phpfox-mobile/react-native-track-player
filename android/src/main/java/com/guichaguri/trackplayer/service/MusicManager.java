@@ -203,6 +203,9 @@ public class MusicManager implements OnAudioFocusChangeListener {
     }
 
     public void onEnd(Track previous, long prevPos) {
+        if (previous == null) {
+            return;
+        }
         Log.d(Utils.LOG, "onEnd");
 
         Bundle bundle = new Bundle();
