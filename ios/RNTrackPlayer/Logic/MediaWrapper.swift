@@ -132,7 +132,7 @@ class MediaWrapper: AudioPlayerDelegate {
     }
     
     func removeUpcomingTracks() {
-        queue = queue.filter { $0.0 <= currentIndex }
+        queue = queue.filter { x,y in x <= currentIndex }
     }
     
     func skipToTrack(id: String) {
