@@ -13,9 +13,10 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.WifiLock;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
-import android.support.annotation.RequiresApi;
+import androidx.annotation.RequiresApi;
 import android.util.Log;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.DefaultLoadControl;
@@ -48,6 +49,7 @@ public class MusicManager implements OnAudioFocusChangeListener {
     @RequiresApi(26)
     private AudioFocusRequest focus = null;
     private boolean hasAudioFocus = false;
+    private boolean wasDucking = false;
 
     private BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
         @Override
@@ -58,6 +60,7 @@ public class MusicManager implements OnAudioFocusChangeListener {
     private boolean receivingNoisyEvents = false;
 
     private boolean stopWithApp = false;
+    private boolean alwaysPauseOnInterruption = false;
 
     @SuppressLint("InvalidWakeLockTag")
     public MusicManager(MusicService service) {
@@ -86,8 +89,16 @@ public class MusicManager implements OnAudioFocusChangeListener {
         this.stopWithApp = stopWithApp;
     }
 
+    public void setAlwaysPauseOnInterruption(boolean alwaysPauseOnInterruption) {
+        this.alwaysPauseOnInterruption = alwaysPauseOnInterruption;
+    }
+
     public MetadataManager getMetadata() {
         return metadata;
+    }
+
+    public Handler getHandler() {
+        return service.handler;
     }
 
     public void switchPlayback(ExoPlayback playback) {
@@ -104,22 +115,27 @@ public class MusicManager implements OnAudioFocusChangeListener {
     }
 
     public LocalPlayback createLocalPlayback(Bundle options) {
+        boolean autoUpdateMetadata = options.getBoolean("autoUpdateMetadata", true);
         int minBuffer = (int)Utils.toMillis(options.getDouble("minBuffer", Utils.toSeconds(DEFAULT_MIN_BUFFER_MS)));
         int maxBuffer = (int)Utils.toMillis(options.getDouble("maxBuffer", Utils.toSeconds(DEFAULT_MAX_BUFFER_MS)));
         int playBuffer = (int)Utils.toMillis(options.getDouble("playBuffer", Utils.toSeconds(DEFAULT_BUFFER_FOR_PLAYBACK_MS)));
+        int backBuffer = (int)Utils.toMillis(options.getDouble("backBuffer", Utils.toSeconds(DEFAULT_BACK_BUFFER_DURATION_MS)));
         long cacheMaxSize = (long)(options.getDouble("maxCacheSize", 0) * 1024);
         int multiplier = DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS / DEFAULT_BUFFER_FOR_PLAYBACK_MS;
 
         LoadControl control = new DefaultLoadControl.Builder()
                 .setBufferDurationsMs(minBuffer, maxBuffer, playBuffer, playBuffer * multiplier)
+                .setBackBuffer(backBuffer, false)
                 .createDefaultLoadControl();
 
-        SimpleExoPlayer player = ExoPlayerFactory.newSimpleInstance(service, new DefaultRenderersFactory(service), new DefaultTrackSelector(), control);
+        SimpleExoPlayer player = new SimpleExoPlayer.Builder(service)
+                .setLoadControl(control)
+                .build();
 
         player.setAudioAttributes(new com.google.android.exoplayer2.audio.AudioAttributes.Builder()
                 .setContentType(C.CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build());
 
-        return new LocalPlayback(service, this, player, cacheMaxSize);
+        return new LocalPlayback(service, this, player, cacheMaxSize, autoUpdateMetadata);
     }
 
     @SuppressLint("WakelockTimeout")
@@ -134,8 +150,8 @@ public class MusicManager implements OnAudioFocusChangeListener {
             requestFocus();
 
             if(!receivingNoisyEvents) {
-                service.registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
                 receivingNoisyEvents = true;
+                service.registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
             }
 
             if(!wakeLock.isHeld()) wakeLock.acquire();
@@ -145,7 +161,8 @@ public class MusicManager implements OnAudioFocusChangeListener {
             }
         }
 
-        metadata.setActive(true);
+        if (playback.shouldAutoUpdateMetadata())
+            metadata.setActive(true);
     }
 
     public void onPause() {
@@ -161,11 +178,18 @@ public class MusicManager implements OnAudioFocusChangeListener {
         if(wakeLock.isHeld()) wakeLock.release();
         if(wifiLock.isHeld()) wifiLock.release();
 
-        metadata.setActive(true);
+        if (playback.shouldAutoUpdateMetadata())
+            metadata.setActive(true);
     }
 
     public void onStop() {
         Log.d(Utils.LOG, "onStop");
+
+        // Unregisters the noisy receiver
+        if(receivingNoisyEvents) {
+            service.unregisterReceiver(noisyReceiver);
+            receivingNoisyEvents = false;
+        }
 
         // Release the wake and the wifi locks
         if(wakeLock.isHeld()) wakeLock.release();
@@ -173,7 +197,8 @@ public class MusicManager implements OnAudioFocusChangeListener {
 
         abandonFocus();
 
-        metadata.setActive(false);
+        if (playback.shouldAutoUpdateMetadata())
+            metadata.setActive(false);
     }
 
     public void onStateChange(int state) {
@@ -182,18 +207,21 @@ public class MusicManager implements OnAudioFocusChangeListener {
         Bundle bundle = new Bundle();
         bundle.putInt("state", state);
         service.emit(MusicEvents.PLAYBACK_STATE, bundle);
-        metadata.updatePlayback(playback);
+
+        if (playback.shouldAutoUpdateMetadata())
+            metadata.updatePlayback(playback);
     }
 
-    public void onTrackUpdate(Track previous, long prevPos, Track next) {
+    public void onTrackUpdate(Integer prevIndex, long prevPos, Integer nextIndex, Track next) {
         Log.d(Utils.LOG, "onTrackUpdate");
 
-        if(next != null) metadata.updateMetadata(next);
+        if(playback.shouldAutoUpdateMetadata() && next != null)
+            metadata.updateMetadata(playback, next);
 
         Bundle bundle = new Bundle();
-        bundle.putString("track", previous != null ? previous.id : null);
+        if (prevIndex != null) bundle.putInt("track", prevIndex);
         bundle.putDouble("position", Utils.toSeconds(prevPos));
-        bundle.putString("nextTrack", next != null ? next.id : null);
+        if (nextIndex != null) bundle.putInt("nextTrack", nextIndex);
         service.emit(MusicEvents.PLAYBACK_TRACK_CHANGED, bundle);
     }
 
@@ -201,16 +229,27 @@ public class MusicManager implements OnAudioFocusChangeListener {
         metadata.removeNotifications();
     }
 
-    public void onEnd(Track previous, long prevPos) {
-        if (previous == null) {
-            return;
-        }
+    public void onEnd(Integer previousIndex, long prevPos) {
         Log.d(Utils.LOG, "onEnd");
 
         Bundle bundle = new Bundle();
-        bundle.putString("track", previous != null ? previous.id : null);
+        if (previousIndex != null) bundle.putInt("track", previousIndex);
         bundle.putDouble("position", Utils.toSeconds(prevPos));
         service.emit(MusicEvents.PLAYBACK_QUEUE_ENDED, bundle);
+    }
+
+    public void onMetadataReceived(String source, String title, String url, String artist, String album, String date, String genre) {
+        Log.d(Utils.LOG, "onMetadataReceived: " + source);
+
+        Bundle bundle = new Bundle();
+        bundle.putString("source", source);
+        bundle.putString("title", title);
+        bundle.putString("url", url);
+        bundle.putString("artist", artist);
+        bundle.putString("album", album);
+        bundle.putString("date", date);
+        bundle.putString("genre", genre);
+        service.emit(MusicEvents.PLAYBACK_METADATA, bundle);
     }
 
     public void onError(String code, String error) {
@@ -227,24 +266,38 @@ public class MusicManager implements OnAudioFocusChangeListener {
     public void onAudioFocusChange(int focus) {
         Log.d(Utils.LOG, "onDuck");
 
+        boolean permanent = false;
         boolean paused = false;
         boolean ducking = false;
 
         switch(focus) {
             case AudioManager.AUDIOFOCUS_LOSS:
+                permanent = true;
+                abandonFocus();
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
                 paused = true;
                 break;
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
-                ducking = true;
+                if (alwaysPauseOnInterruption)
+                    paused = true;
+                else
+                    ducking = true;
                 break;
-            case AudioManager.AUDIOFOCUS_GAIN:
+            default:
                 break;
         }
 
+        if (ducking) {
+            playback.setVolumeMultiplier(0.5F);
+            wasDucking = true;
+        } else if (wasDucking) {
+            playback.setVolumeMultiplier(1.0F);
+            wasDucking = false;
+        }
+
         Bundle bundle = new Bundle();
+        bundle.putBoolean("permanent", permanent);
         bundle.putBoolean("paused", paused);
-        bundle.putBoolean("ducking", ducking);
         service.emit(MusicEvents.BUTTON_DUCK, bundle);
     }
 
@@ -264,6 +317,7 @@ public class MusicManager implements OnAudioFocusChangeListener {
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build())
+                    .setWillPauseWhenDucked(alwaysPauseOnInterruption)
                     .build();
 
             r = manager.requestAudioFocus(focus);

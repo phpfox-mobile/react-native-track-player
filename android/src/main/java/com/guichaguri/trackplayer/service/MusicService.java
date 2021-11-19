@@ -1,15 +1,21 @@
 package com.guichaguri.trackplayer.service;
 
+import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
-import android.support.v4.content.LocalBroadcastManager;
-import android.support.v4.media.session.MediaButtonReceiver;
+import androidx.core.app.NotificationCompat;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+import androidx.media.session.MediaButtonReceiver;
 
 import com.facebook.react.HeadlessJsTaskService;
+import com.facebook.react.ReactInstanceManager;
 import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.jstasks.HeadlessJsTaskConfig;
+import com.guichaguri.trackplayer.service.Utils;
 import javax.annotation.Nullable;
 
 /**
@@ -52,6 +58,30 @@ public class MusicService extends HeadlessJsTaskService {
         }
     }
 
+    private void onStartForeground() {
+        boolean serviceForeground = false;
+
+        if(manager != null) {
+            // The session is only active when the service is on foreground
+            serviceForeground = manager.getMetadata().getSession().isActive();
+        }
+
+        if(!serviceForeground) {
+            ReactInstanceManager reactInstanceManager = getReactNativeHost().getReactInstanceManager();
+            ReactContext reactContext = reactInstanceManager.getCurrentReactContext();
+
+            // Checks whether there is a React activity
+            if(reactContext == null || !reactContext.hasCurrentActivity()) {
+                String channel = Utils.getNotificationChannel((Context) this);
+
+                // Sets the service to foreground with an empty notification
+                startForeground(1, new NotificationCompat.Builder(this, channel).build());
+                // Stops the service right after
+                stopSelf();
+            }
+        }
+    }
+
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
@@ -64,8 +94,14 @@ public class MusicService extends HeadlessJsTaskService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction())) {
-            MediaButtonReceiver.handleIntent(manager.getMetadata().getSession(), intent);
+        if(intent != null && Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction())) {
+            // Check if the app is on background, then starts a foreground service and then ends it right after
+            onStartForeground();
+
+            if(manager != null) {
+                MediaButtonReceiver.handleIntent(manager.getMetadata().getSession(), intent);
+            }
+
             return START_NOT_STICKY;
         }
 
@@ -73,7 +109,14 @@ public class MusicService extends HeadlessJsTaskService {
         handler = new Handler();
 
         super.onStartCommand(intent, flags, startId);
-        return START_STICKY;
+        return START_NOT_STICKY;
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        String channel = Utils.getNotificationChannel((Context) this);
+        startForeground(1, new NotificationCompat.Builder(this, channel).build());
     }
 
     @Override
@@ -81,6 +124,7 @@ public class MusicService extends HeadlessJsTaskService {
         super.onDestroy();
 
         destroy();
+        stopForeground(true);
     }
 
     @Override
@@ -88,6 +132,10 @@ public class MusicService extends HeadlessJsTaskService {
         super.onTaskRemoved(rootIntent);
 
         if (manager == null || manager.shouldStopWithApp()) {
+            if (manager != null && manager.getPlayback() != null) {
+                manager.getPlayback().stop();
+            }
+            destroy();
             stopSelf();
         }
     }
