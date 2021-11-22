@@ -298,9 +298,6 @@ public class MetadataManager {
         pb.setState(playback.getState(), playback.getPosition(), playback.getRate());
         pb.setBufferedPosition(playback.getBufferedPosition());
 
-        if (state == PlaybackStateCompat.STATE_PLAYING) {
-            session.setActive(true);
-        }
         session.setPlaybackState(pb.build());
     }
 
