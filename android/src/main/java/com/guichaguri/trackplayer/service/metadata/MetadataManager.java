@@ -79,7 +79,8 @@ public class MetadataManager {
 
         // Add the Uri data so apps can identify that it was a notification click
         openApp.setAction(Intent.ACTION_VIEW);
-        openApp.setData(Uri.parse("trackplayer://notification.click"));
+        // TODO: Add uri if needed open a webview in app
+        // openApp.setData(Uri.parse("trackplayer://notification.click"));
 
         builder.setContentIntent(PendingIntent.getActivity(context, 0, openApp, PendingIntent.FLAG_CANCEL_CURRENT));
 
